@@ -1,3 +1,5 @@
+import { RequirementProgress } from './requirement';
+
 interface CognitoSession {
     idToken: {
         jwtToken: string;
@@ -7,112 +9,78 @@ interface CognitoSession {
     };
 }
 
-export class CognitoUser {
-    constructor(
-        readonly session: CognitoSession,
-        readonly username: string,
-        readonly rawResponse: any
-    ) {}
+export interface CognitoUser {
+    session: CognitoSession;
+    username: string;
+    rawResponse: any;
+}
 
-    static from(cognitoResponse: any) {
-        return new this(
-            cognitoResponse.signInUserSession,
-            cognitoResponse.username,
-            cognitoResponse
-        );
-    }
+export function parseCognitoResponse(cognitoResponse: any) {
+    return {
+        session: cognitoResponse.signInUserSession,
+        username: cognitoResponse.username,
+        rawResponse: cognitoResponse,
+    };
+}
 
-    /**
-     * withSession returns a copy of this CognitoUser with the provided CognitoSession. This function
-     * can be used to get an updated version of this user without modifying state.
-     */
-    withSession(session?: CognitoSession): CognitoUser {
-        if (!session) {
-            return this;
-        }
-        return new CognitoUser(session, this.username, this.rawResponse);
+export enum RatingSystem {
+    Chesscom = 'CHESSCOM',
+    Lichess = 'LICHESS',
+    Fide = 'FIDE',
+    Uscf = 'USCF',
+}
+
+export function formatRatingSystem(ratingSystem: RatingSystem): string {
+    switch (ratingSystem) {
+        case RatingSystem.Chesscom:
+            return 'Chess.com Rapid';
+        case RatingSystem.Lichess:
+            return 'Lichess Classical';
+        case RatingSystem.Fide:
+            return 'FIDE';
+        case RatingSystem.Uscf:
+            return 'USCF';
     }
 }
 
-export type UserUpdate = Partial<User> & {
-    session?: CognitoSession;
-};
+export interface User {
+    cognitoUser?: CognitoUser;
 
-export class User {
-    constructor(
-        readonly cognitoUser: CognitoUser | undefined,
-        readonly username: string,
+    username: string;
+    discordUsername: string;
+    dojoCohort: string;
+    bio: string;
 
-        public discordUsername: string,
-        public chesscomUsername: string,
-        public lichessUsername: string,
-        public dojoCohort: string,
-        public disableBookingNotifications: boolean,
-        public disableCancellationNotifications: boolean,
+    chesscomUsername: string;
+    lichessUsername: string;
+    fideId: string;
+    uscfId: string;
 
-        public isAdmin: boolean
-    ) {}
+    ratingSystem: RatingSystem;
 
-    static from(apiResponse: any, cognitoUser?: CognitoUser) {
-        return new this(
-            cognitoUser,
-            apiResponse.username,
-            apiResponse.discordUsername || '',
-            apiResponse.chesscomUsername || '',
-            apiResponse.lichessUsername || '',
-            apiResponse.dojoCohort || '',
-            apiResponse.disableBookingNotifications || false,
-            apiResponse.disableCancellationNotifications || false,
-            apiResponse.isAdmin || false
-        );
-    }
+    startChesscomRating: number;
+    currentChesscomRating: number;
 
-    /**
-     * fromPartial returns a new User created from the provided Partial User object. Fields
-     * missing from the Partial object are filled in with their empty values.
-     * @param user The Partial object to use when initializing the user
-     * @returns A new User object.
-     */
-    static fromPartial(user: Partial<User>): User {
-        return new User(
-            user.cognitoUser || undefined,
-            user.username || '',
-            user.discordUsername || '',
-            user.chesscomUsername || '',
-            user.lichessUsername || '',
-            user.dojoCohort || '',
-            user.disableBookingNotifications || false,
-            user.disableCancellationNotifications || false,
-            user.isAdmin || false
-        );
-    }
+    startLichessRating: number;
+    currentLichessRating: number;
 
-    /**
-     * withSession returns a copy of this User with the provided CognitoSession. This function
-     * can be used to get an updated version of this user without modifying state.
-     */
-    withSession(session: CognitoSession): User {
-        return this.withUpdate({ session });
-    }
+    startFideRating: number;
+    currentFideRating: number;
 
-    /**
-     * withUpdate returns a copy of this User with the provided update made. This function can
-     * be used to get an updated version of this user without modifying state.
-     */
-    withUpdate(update: UserUpdate): User {
-        return new User(
-            this.cognitoUser?.withSession(update.session),
-            this.username,
-            update.discordUsername || this.discordUsername,
-            update.chesscomUsername || this.chesscomUsername,
-            update.lichessUsername || this.lichessUsername,
-            update.dojoCohort || this.dojoCohort,
-            update.disableBookingNotifications ?? this.disableBookingNotifications,
-            update.disableCancellationNotifications ??
-                this.disableCancellationNotifications,
-            update.isAdmin || this.isAdmin
-        );
-    }
+    startUscfRating: number;
+    currentUscfRating: number;
+
+    progress: { [requirementId: string]: RequirementProgress };
+    disableBookingNotifications: boolean;
+    disableCancellationNotifications: boolean;
+    isAdmin: boolean;
+}
+
+export function parseUser(apiResponse: any, cognitoUser?: CognitoUser) {
+    return {
+        ...apiResponse,
+        cognitoUser,
+    };
 }
 
 export const dojoCohorts: string[] = [
