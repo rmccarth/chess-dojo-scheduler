@@ -30,7 +30,7 @@ client_secret: [redacted]]
 - `sls deploy` will attempt to deploy the stack defined in serverless.yml
 - serverless will give a list of services that have been deployed upon success. You will need to edit `frontend/src/config.ts` with the base execution URLs that serverless is providing you. e.g. my development block looks like this:
 
-```json
+```
     development: {
         auth: {
             region: 'us-east-1',
