@@ -50,6 +50,7 @@ client_secret: [redacted]]
     },
 ```
 
-
+- Made some changes to the backend? Update the `Makefile` in `backend/` and compile with `make`. `sls deploy` will update the backend with the new function updates.
+- A quick validation test, after grabbing your google_userid out of DynamoDB you can run `sls invoke -f getUser -d '{"pathParameters":{"username":"google_youruseridhere"}}'` to test the getUser functions deployment. 
 
 
