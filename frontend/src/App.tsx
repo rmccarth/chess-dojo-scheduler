@@ -6,6 +6,7 @@ import { getConfig } from './config';
 import { AuthProvider, RequireAuth, RequireProfile } from './auth/Auth';
 import LandingPage from './home/LandingPage';
 import ProfilePage from './profile/ProfilePage';
+import ProfileEditorPage from './profile/ProfileEditorPage';
 import { ApiProvider } from './api/Api';
 import CalendarPage from './calendar/CalendarPage';
 import MeetingPage from './meeting/MeetingPage';
@@ -23,6 +24,8 @@ import GamePage from './games/GamePage';
 import ListGamesPage from './games/ListGamesPage';
 import SubmitGamePage from './games/SubmitGamePage';
 import AvailabilityBooker from './calendar/AvailabilityBooker';
+import ScoreboardPage from './scoreboard/ScoreboardPage';
+import NotFoundPage from './NotFoundPage';
 
 const config = getConfig();
 Amplify.configure({
@@ -68,7 +71,11 @@ function Router() {
                 <Route path='forgot-password' element={<ForgotPasswordPage />} />
 
                 <Route element={<RequireAuth />}>
-                    <Route path='profile' element={<ProfilePage />} />
+                    <Route path='profile'>
+                        <Route index element={<ProfilePage />} />
+                        <Route path='edit' element={<ProfileEditorPage />} />
+                        <Route path=':username' element={<ProfilePage />} />
+                    </Route>
                     <Route path='admin' element={<AdminPage />} />
 
                     <Route element={<RequireProfile />}>
@@ -91,10 +98,14 @@ function Router() {
                             <Route path='submit' element={<SubmitGamePage />} />
                             <Route path=':cohort/:id' element={<GamePage />} />
                         </Route>
-                        {/* <Route path='games' element={<GamePage />} /> */}
+
+                        <Route path='scoreboard'>
+                            <Route index element={<ScoreboardPage />} />
+                            <Route path=':cohort' element={<ScoreboardPage />} />
+                        </Route>
                     </Route>
                 </Route>
-                {/* <Route path='*' element={<NotFoundPage />} /> */}
+                <Route path='*' element={<NotFoundPage />} />
             </Route>
         </Routes>
     );

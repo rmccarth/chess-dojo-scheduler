@@ -179,6 +179,21 @@ functions:
           - dynamodb:GetItem
         Resource: !GetAtt UsersTable.Arn
 
+  updateRatings:
+    handler: bin/user/ratings/update
+    package:
+      patterns:
+        - ./bin/user/ratings/update
+    events:
+      - schedule: cron(0 0 * * ? *)
+    timeout: 300
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Scan
+          - dynamodb:PartiQLUpdate
+        Resource: !GetAtt UsersTable.Arn
+
   ########## Availability Endpoints ##############
 
   setAvailability:
@@ -489,6 +504,26 @@ functions:
               - - !GetAtt GamesTable.Arn
                 - '/index/BlackIndex'
 
+  ########## Requirement Endpoints ##############
+
+  listRequirements:
+    handler: bin/requirement/list
+    package:
+      patterns:
+        - ./bin/requirement/list
+    events:
+      - httpApi:
+          path: /requirement/{cohort}
+          method: get
+          authorizer: serviceAuthorizer
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+          - dynamodb:Scan
+        Resource:
+          - !GetAtt RequirementsTable.Arn
+
 resources:
   Conditions:
     IsProd: !Equals ['${sls:stage}', 'prod']
@@ -576,9 +611,15 @@ resources:
         KeySchema:
           - AttributeName: username
             KeyType: HASH
-        ProvisionedThroughput:
-          ReadCapacityUnits: 1
-          WriteCapacityUnits: 1
+        BillingMode: !If
+          - IsProd
+          - PROVISIONED
+          - PAY_PER_REQUEST
+        ProvisionedThroughput: !If
+          - IsProd
+          - ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+          - !Ref AWS::NoValue
 
     AvailabilitiesTable:
       Type: AWS::DynamoDB::Table
@@ -607,12 +648,20 @@ resources:
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL
-            ProvisionedThroughput:
-              ReadCapacityUnits: 1
-              WriteCapacityUnits: 1
-        ProvisionedThroughput:
-          ReadCapacityUnits: 1
-          WriteCapacityUnits: 1
+            ProvisionedThroughput: !If
+              - IsProd
+              - ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+              - !Ref AWS::NoValue
+        BillingMode: !If
+          - IsProd
+          - PROVISIONED
+          - PAY_PER_REQUEST
+        ProvisionedThroughput: !If
+          - IsProd
+          - ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+          - !Ref AWS::NoValue
         TimeToLiveSpecification:
           AttributeName: expirationTime
           Enabled: true
@@ -705,9 +754,15 @@ resources:
             KeyType: HASH
           - AttributeName: id
             KeyType: RANGE
-        ProvisionedThroughput:
-          ReadCapacityUnits: 1
-          WriteCapacityUnits: 1
+        BillingMode: !If
+          - IsProd
+          - PROVISIONED
+          - PAY_PER_REQUEST
+        ProvisionedThroughput: !If
+          - IsProd
+          - ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+          - !Ref AWS::NoValue
         GlobalSecondaryIndexes:
           - IndexName: OwnerIndex
             KeySchema:
@@ -722,9 +777,11 @@ resources:
                 - black
                 - date
                 - headers
-            ProvisionedThroughput:
-              ReadCapacityUnits: 1
-              WriteCapacityUnits: 1
+            ProvisionedThroughput: !If
+              - IsProd
+              - ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+              - !Ref AWS::NoValue
           - IndexName: WhiteIndex
             KeySchema:
               - AttributeName: white
@@ -738,9 +795,11 @@ resources:
                 - date
                 - owner
                 - headers
-            ProvisionedThroughput:
-              ReadCapacityUnits: 1
-              WriteCapacityUnits: 1
+            ProvisionedThroughput: !If
+              - IsProd
+              - ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+              - !Ref AWS::NoValue
           - IndexName: BlackIndex
             KeySchema:
               - AttributeName: black
@@ -754,6 +813,8 @@ resources:
                 - date
                 - owner
                 - headers
-            ProvisionedThroughput:
-              ReadCapacityUnits: 1
-              WriteCapacityUnits: 1
+            ProvisionedThroughput: !If
+              - IsProd
+              - ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+              - !Ref AWS::NoValue

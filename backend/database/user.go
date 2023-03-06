@@ -2,6 +2,8 @@ package database
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"chess-dojo-scheduler/backend/src/github.com/aws/aws-sdk-go/service/dynamodb/expression"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
 	"github.com/jackstenglein/chess-dojo-scheduler/backend/api/errors"
+	"github.com/jackstenglein/chess-dojo-scheduler/backend/api/log"
 )
 
 type DojoCohort string
@@ -65,6 +68,12 @@ type User struct {
 	// The user's Discord username
 	DiscordUsername string `dynamodbav:"discordUsername,omitempty" json:"discordUsername,omitempty"`
 
+	// The user's bio
+	Bio string `dynamodbav:"bio" json:"bio"`
+
+	// The user's preferred rating system
+	RatingSystem string `dynamodbav:"ratingSystem" json:"ratingSystem"`
+
 	// The user's Chess.com username
 	ChesscomUsername string `dynamodbav:"chesscomUsername,omitempty" json:"chesscomUsername,omitempty"`
 
@@ -76,6 +85,30 @@ type User struct {
 
 	// The user's USCF Id
 	UscfId string `dynamodbav:"uscfId,omitempty" json:"uscfId,omitempty"`
+
+	// The user's starting Chess.com rating
+	StartChesscomRating int `dynamodbav:"startChesscomRating" json:"startChesscomRating"`
+
+	// The user's current Chess.com rating
+	CurrentChesscomRating int `dynamodbav:"currentChesscomRating" json:"currentChesscomRating"`
+
+	// The user's starting Lichess rating
+	StartLichessRating int `dynamodbav:"startLichessRating" json:"startLichessRating"`
+
+	// The user's current Lichess rating
+	CurrentLichessRating int `dynamodbav:"currentLichessRating" json:"currentLichessRating"`
+
+	// The user's starting FIDE rating
+	StartFideRating int `dynamodbav:"startFideRating" json:"startFideRating"`
+
+	// The user's current FIDE rating
+	CurrentFideRating int `dynamodbav:"currentFideRating" json:"currentFideRating"`
+
+	// The user's starting USCF rating
+	StartUscfRating int `dynamodbav:"startUscfRating" json:"startUscfRating"`
+
+	// The user's current Uscf rating
+	CurrentUscfRating int `dynamodbav:"currentUscfRating" json:"currentUscfRating"`
 
 	// The user's Dojo cohort
 	DojoCohort DojoCohort `dynamodbav:"dojoCohort,omitempty" json:"dojoCohort,omitempty"`
@@ -237,18 +270,42 @@ func (repo *dynamoRepository) GetUser(username string) (*User, error) {
 // startKey is an optional parameter that can be used to perform pagination.
 // The list of users and the next start key are returned.
 func (repo *dynamoRepository) ScanUsers(startKey string) ([]*User, string, error) {
-	var exclusiveStartKey map[string]*dynamodb.AttributeValue
+	input := &dynamodb.ScanInput{
+		TableName: aws.String(userTable),
+	}
+	return repo.scanUsersWithInput(input, startKey)
+}
+
+const ratingsProjection = "username, chesscomUsername, lichessUsername, fideId, uscfId, startChesscomRating, " +
+	"currentChesscomRating, startLichessRating, currentLichessRating, startFideRating, currentFideRating, " +
+	"startUscfRating, currentUscfRating"
+
+// ScanUserRatings returns a list of all Users in the database, up to 1MB of data.
+// Only the usernames and ratings are returned.
+// startkey is an optional parameter that can be used to perform pagination.
+// The list of users and the next start key are returned.
+func (repo *dynamoRepository) ScanUserRatings(startKey string) ([]*User, string, error) {
+	input := &dynamodb.ScanInput{
+		ProjectionExpression: aws.String(ratingsProjection),
+		TableName:            aws.String(userTable),
+	}
+	return repo.scanUsersWithInput(input, startKey)
+}
+
+// scanUsersWithInput returns a list of all Users in the database, with up to 1MB of data in each page.
+// input is required and is the ScanInput to run.
+// startKey is an optional parameter that can be used to perform pagination.
+// The list of users and the next start key is returned.
+func (repo *dynamoRepository) scanUsersWithInput(input *dynamodb.ScanInput, startKey string) ([]*User, string, error) {
 	if startKey != "" {
+		var exclusiveStartKey map[string]*dynamodb.AttributeValue
 		err := json.Unmarshal([]byte(startKey), &exclusiveStartKey)
 		if err != nil {
 			return nil, "", errors.Wrap(400, "Invalid request: startKey is not valid", "startKey could not be unmarshaled from json", err)
 		}
+		input.SetExclusiveStartKey(exclusiveStartKey)
 	}
 
-	input := &dynamodb.ScanInput{
-		ExclusiveStartKey: exclusiveStartKey,
-		TableName:         aws.String(userTable),
-	}
 	result, err := repo.svc.Scan(input)
 	if err != nil {
 		return nil, "", errors.Wrap(500, "Temporary server error", "DynamoDB Scan failure", err)
@@ -270,6 +327,49 @@ func (repo *dynamoRepository) ScanUsers(startKey string) ([]*User, string, error
 	}
 
 	return users, lastKey, nil
+}
+
+func (repo *dynamoRepository) UpdateUserRatings(users []*User) error {
+	if len(users) > 25 {
+		return errors.New(500, "Temporary server error", "UpdateUserRatings has max limit of 25 users")
+	}
+
+	var sb strings.Builder
+	statements := make([]*dynamodb.BatchStatementRequest, 0, len(users))
+	for _, user := range users {
+		sb.WriteString(fmt.Sprintf("UPDATE \"%s\"", userTable))
+		sb.WriteString(fmt.Sprintf(" SET currentChesscomRating=%d SET currentLichessRating=%d", user.CurrentChesscomRating, user.CurrentLichessRating))
+		sb.WriteString(fmt.Sprintf(" SET currentFideRating=%d SET currentUscfRating=%d", user.CurrentFideRating, user.CurrentUscfRating))
+
+		if user.StartChesscomRating == 0 {
+			sb.WriteString(fmt.Sprintf(" SET startChesscomRating=%d", user.CurrentChesscomRating))
+		}
+		if user.StartLichessRating == 0 {
+			sb.WriteString(fmt.Sprintf(" SET startLichessRating=%d", user.CurrentLichessRating))
+		}
+		if user.StartFideRating == 0 {
+			sb.WriteString(fmt.Sprintf(" SET startFideRating=%d", user.CurrentFideRating))
+		}
+		if user.StartUscfRating == 0 {
+			sb.WriteString(fmt.Sprintf(" SET startUscfRating=%d", user.CurrentUscfRating))
+		}
+		sb.WriteString(fmt.Sprintf(" WHERE username='%s'", user.Username))
+
+		statement := &dynamodb.BatchStatementRequest{
+			Statement: aws.String(sb.String()),
+		}
+		statements = append(statements, statement)
+
+		sb.Reset()
+	}
+
+	input := &dynamodb.BatchExecuteStatementInput{
+		Statements: statements,
+	}
+	output, err := repo.svc.BatchExecuteStatement(input)
+	log.Debugf("Batch execute statement output: ", output)
+
+	return errors.Wrap(500, "Temporary server error", "Failed BatchExecuteStatement", err)
 }
 
 // RecordGameCreation updates the given user to increase their game creation stats.

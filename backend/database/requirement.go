@@ -1,10 +1,28 @@
 package database
 
+import (
+	"encoding/json"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/jackstenglein/chess-dojo-scheduler/backend/api/errors"
+)
+
 type RequirementStatus string
 
 const (
 	Active   RequirementStatus = "ACTIVE"
 	Archived RequirementStatus = "ARCHIVED"
+)
+
+type ScoreboardDisplay string
+
+const (
+	Unspecified ScoreboardDisplay = ""
+	Hidden      ScoreboardDisplay = "HIDDEN"
+	Checkbox    ScoreboardDisplay = "CHECKBOX"
+	ProgressBar ScoreboardDisplay = "PROGRESS_BAR"
 )
 
 type Requirement struct {
@@ -27,36 +45,39 @@ type Requirement struct {
 	Counts map[DojoCohort]int `dynamodbav:"counts" json:"counts"`
 
 	// The score per unit
-	UnitScore int `dynamodbav:"unitScore" json:"unitScore"`
+	UnitScore float32 `dynamodbav:"unitScore" json:"unitScore"`
 
 	// The URLs of the videos describing the requirement, if any exist
 	VideoUrls []string `dynamodbav:"videoUrls" json:"videoUrls"`
 
-	// The cohorts that the requirement applies to
-	Cohorts []DojoCohort `dynamodbav:"cohorts" json:"cohorts"`
+	// The positions included in the requirement, if any exist
+	Positions []string `dynamodbav:"positions" json:"positions"`
 
-	// If true, hide the requirement from the scoreboard
-	HideFromScoreboard bool `dynamodbav:"hideFromScoreboard" json:"hideFromScoreboard"`
+	// How the requirement should be displayed on the scoreboard.
+	ScoreboardDisplay ScoreboardDisplay `dynamodbav:"scoreboardDisplay" json:"scoreboardDisplay"`
 
 	// The time the requirement was most recently updated
 	UpdatedAt string `dynamodbav:"updatedAt" json:"updatedAt"`
+
+	// The priority in which to sort this requirement when displaying to the user
+	SortPriority string `dynamodbav:"sortPriority" json:"sortPriority"`
+
+	// True if the requirement resets when switching cohorts and false if
+	// the requirement carries over across cohorts.
+	Repeatable bool `dynamodbav:"repeatable" json:"repeatable"`
 }
 
 type RequirementProgress struct {
 	// The id of the requirement that the progress applies to
 	RequirementId string `dynamodbav:"requirementId" json:"requirementId"`
 
-	// The display name of the requirement that the progress applies to
-	RequirementName string `dynamodbav:"requirementName" json:"requirementName"`
+	// The current number of units completed in the requirement, by cohort
+	// If the requirement is not repeatable, then there is only one item
+	// for ALL_COHORTS.
+	Counts map[DojoCohort]int `dynamodbav:"counts" json:"counts"`
 
-	// The current number of units completed in the requirement
-	CurrentCount int `dynamodbav:"currentCount" json:"currentCount"`
-
-	// The total number of units in the requirement
-	TotalCount int `dynamodbav:"totalCount" json:"totalCount"`
-
-	// The number of minutes spent working on the requirement
-	MinutesSpent int `dynamodbav:"minutesSpent" json:"minutesSpent"`
+	// The number of minutes spent working on the requirement, by cohort
+	MinutesSpent map[DojoCohort]int `dynamodbav:"minutesSpent" json:"minutesSpent"`
 
 	// The time the requirement was most recently updated
 	UpdatedAt string `dynamodbav:"updatedAt" json:"updatedAt"`
@@ -92,4 +113,117 @@ type Graduation struct {
 
 	// The time that the user graduated
 	UpdatedAt string `dynamodbav:"updatedAt" json:"updatedAt"`
+}
+
+type RequirementLister interface {
+	// ListRequirements fetches a list of requirements matching the provided cohort. If scoreboardOnly is true, then
+	// only requirements which should be displayed on the scoreboard will be returned. The next start key is returned
+	// as well.
+	ListRequirements(cohort DojoCohort, scoreboardOnly bool, startKey string) ([]*Requirement, string, error)
+}
+
+// fetchScoreboardRequirements returns a list of requirements matching the provided cohort that should be displayed
+// on the scoreboard. The next startKey is returned as well.
+func (repo *dynamoRepository) fetchScoreboardRequirements(cohort DojoCohort, startKey string) ([]*Requirement, string, error) {
+	// We use a query here since only the ACTIVE requirements should be displayed on the scoreboard.
+	input := &dynamodb.QueryInput{
+		KeyConditionExpression: aws.String("#status = :active"),
+		ExpressionAttributeNames: map[string]*string{
+			"#status":     aws.String("status"),
+			"#display":    aws.String("scoreboardDisplay"),
+			"#counts":     aws.String("counts"),
+			"#cohort":     aws.String(string(cohort)),
+			"#allcohorts": aws.String("ALL_COHORTS"),
+		},
+		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+			":active": {S: aws.String(string(Active))},
+			":hidden": {S: aws.String(string(Hidden))},
+		},
+		FilterExpression: aws.String("#display <> :hidden AND (attribute_exists(#counts.#cohort) OR attribute_exists(#counts.#allcohorts))"),
+		TableName:        aws.String(requirementTable),
+	}
+
+	if startKey != "" {
+		var exclusiveStartKey map[string]*dynamodb.AttributeValue
+		err := json.Unmarshal([]byte(startKey), &exclusiveStartKey)
+		if err != nil {
+			return nil, "", errors.Wrap(400, "Invalid request: startKey is not valid", "startKey could not be unmarshaled", err)
+		}
+		input.SetExclusiveStartKey(exclusiveStartKey)
+	}
+
+	result, err := repo.svc.Query(input)
+	if err != nil {
+		return nil, "", errors.Wrap(500, "Temporary server error", "DynamoDB query failure", err)
+	}
+
+	var requirements []*Requirement
+	if err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &requirements); err != nil {
+		return nil, "", errors.Wrap(500, "Temporary server error", "Failed to unmarshal Query result", err)
+	}
+
+	var lastKey string
+	if len(result.LastEvaluatedKey) > 0 {
+		b, err := json.Marshal(result.LastEvaluatedKey)
+		if err != nil {
+			return nil, "", errors.Wrap(500, "Temporary server error", "Failed to marshal fetchScoreboardRequirements LastEvaluatedKey", err)
+		}
+		lastKey = string(b)
+	}
+
+	return requirements, lastKey, nil
+}
+
+// scanRequirements returns a list of requirements matching the provided cohort. Archived requirements and requirements
+// hidden from the scoreboard are returned.
+func (repo *dynamoRepository) scanRequirements(cohort DojoCohort, startKey string) ([]*Requirement, string, error) {
+	input := &dynamodb.ScanInput{
+		ExpressionAttributeNames: map[string]*string{
+			"#counts":     aws.String("counts"),
+			"#cohort":     aws.String(string(cohort)),
+			"#allcohorts": aws.String("ALL_COHORTS"),
+		},
+		FilterExpression: aws.String("attribute_exists(#counts.#cohort) OR attribute_exists(#counts.#allcohorts)"),
+		TableName:        aws.String(requirementTable),
+	}
+
+	if startKey != "" {
+		var exclusiveStartKey map[string]*dynamodb.AttributeValue
+		err := json.Unmarshal([]byte(startKey), &exclusiveStartKey)
+		if err != nil {
+			return nil, "", errors.Wrap(400, "Invalid request: startKey is not valid", "startKey could not be unmarshaled", err)
+		}
+		input.SetExclusiveStartKey(exclusiveStartKey)
+	}
+
+	result, err := repo.svc.Scan(input)
+	if err != nil {
+		return nil, "", errors.Wrap(500, "Temporary server error", "DynamoDB scan failure", err)
+	}
+
+	var requirements []*Requirement
+	if err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &requirements); err != nil {
+		return nil, "", errors.Wrap(500, "Temporary server error", "Failed to unmarshal Scan result", err)
+	}
+
+	var lastKey string
+	if len(result.LastEvaluatedKey) > 0 {
+		b, err := json.Marshal(result.LastEvaluatedKey)
+		if err != nil {
+			return nil, "", errors.Wrap(500, "Temporary server error", "Failed to marshal scanRequirements LastEvaluatedKey", err)
+		}
+		lastKey = string(b)
+	}
+
+	return requirements, lastKey, nil
+}
+
+// ListRequirements fetches a list of requirements matching the provided cohort. If scoreboardOnly is true, then
+// only requirements which should be displayed on the scoreboard will be returned. The next start key is returned
+// as well.
+func (repo *dynamoRepository) ListRequirements(cohort DojoCohort, scoreboardOnly bool, startKey string) ([]*Requirement, string, error) {
+	if scoreboardOnly {
+		return repo.fetchScoreboardRequirements(cohort, startKey)
+	}
+	return repo.scanRequirements(cohort, startKey)
 }

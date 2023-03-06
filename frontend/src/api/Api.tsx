@@ -25,7 +25,7 @@ import {
     listMeetings,
     MeetingApiContextType,
 } from './meetingApi';
-import { UserApiContextType, getUser, updateUser } from './userApi';
+import { UserApiContextType, getUser, getUserPublic, updateUser } from './userApi';
 import {
     GameApiContextType,
     CreateGameRequest,
@@ -35,6 +35,7 @@ import {
     listGamesByOwner,
     createComment,
 } from './gameApi';
+import { RequirementApiContextType, listRequirements } from './requirementApi';
 
 /**
  * ApiContextType defines the interface of the API as available through ApiProvider.
@@ -44,7 +45,8 @@ type ApiContextType = AdminApiContextType &
     AvailabilityApiContextType &
     MeetingApiContextType &
     CalendarApiContextType &
-    GameApiContextType;
+    GameApiContextType &
+    RequirementApiContextType;
 
 const ApiContext = createContext<ApiContextType>(null!);
 
@@ -75,6 +77,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
             adminGetStatistics: () => adminGetStatistics(idToken),
 
             getUser: () => getUser(idToken),
+            getUserPublic: (username: string) => getUserPublic(username),
             updateUser: (update: Partial<User>) =>
                 updateUser(idToken, update, auth.updateUser),
 
@@ -107,14 +110,30 @@ export function ApiProvider({ children }: { children: ReactNode }) {
                 endDate?: string
             ) => listGamesByCohort(idToken, cohort, startKey, startDate, endDate),
             listGamesByOwner: (
+                owner?: string,
                 startKey?: string,
                 startDate?: string,
                 endDate?: string,
                 player?: string,
                 color?: string
-            ) => listGamesByOwner(idToken, startKey, startDate, endDate, player, color),
+            ) =>
+                listGamesByOwner(
+                    idToken,
+                    owner,
+                    startKey,
+                    startDate,
+                    endDate,
+                    player,
+                    color
+                ),
             createComment: (cohort: string, id: string, content: string) =>
                 createComment(idToken, auth.user!, cohort, id, content),
+
+            listRequirements: (
+                cohort: string,
+                scoreboardOnly: boolean,
+                startKey?: string
+            ) => listRequirements(idToken, cohort, scoreboardOnly, startKey),
         };
     }, [idToken, auth.user, auth.updateUser]);
 
